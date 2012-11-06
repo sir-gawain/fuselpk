@@ -1,0 +1,3 @@
+include fuselpk/test/configurationfiles/*
+include fuselpk/test/mountpoint/*
+include fuselpk/schemas/*

@@ -1,0 +1,66 @@
+#######
+FuseLPK
+#######
+
+FuseLPK is a filesystem exposing public ssh key for OpenSSH from an directory.
+This is useful for managing keys for a lot of users and systems.
+
+============
+Requirements
+============
+
+ * python-fuse
+ * python-ldap
+
+===========
+LDAP schema
+===========
+
+You can add the schema in the egg, or create your own for advanced admin.
+
+==================
+Configuration file
+==================
+
+Please read default values in cfg.py.
+
+==============
+Manually mount
+==============
+
+fuselpk /mount/point
+
+===========================
+fstab mount at startup time
+===========================
+
+Put in your fstab:
+
+::
+
+  fuselpk#		/opt/fuselpk	fuse    config=/etc/ssh/fuselpk.conf		0	0
+
+============================
+Configure ssh to use fuselpk
+============================
+
+Adjust the sshd_config:
+
+::
+  
+  AuthorizedKeysFile     /opt/fuselpk/%u/authorized_keys
+
+===============
+Test's buildout
+===============
+
+Please clone repository buildout_  and read attached README.
+
+.. _buildout: https://bitbucket.org/fdupre/fuselpk-buildout/
+
+==========
+Developers
+==========
+Repository_
+
+.. _Repository: https://bitbucket.org/fdupre/fuselpk
