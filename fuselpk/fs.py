@@ -20,6 +20,7 @@ fuse.fuse_python_api = (0, 2)
 
 import ldap
 import errno
+import syslog
 
 from time import mktime, gmtime
 from fuse import Fuse
@@ -30,18 +31,13 @@ from StringIO import StringIO
 from cfg import lpkconfig, cfg_schema
 
 
-class NotFound(Exception):
-    """Used for response to crazy query"""
-    
-
 def ifDeprecatedCache(reloadCacheFunc):
 
     """Decorator only used by fs, reload cache if necessary"""
 
     def wrapper(func):
         def wrapped(self, *arg, **kw):
-            if mktime(gmtime()) - float(self._cfg_['timeout']) \
-               > self._lastCacheRefresh_:
+            if mktime(gmtime()) - float(self._cfg_['timeout']) > self._lastCacheRefresh_:
                  reloadCacheFunc(self)
             return func(self, *arg, **kw)
         return wrapped
@@ -55,7 +51,7 @@ class pkfile(object):
 
     def __init__(self, path, content):
 
-        """File content"""        
+        """File content"""
         self._content_ = StringIO(content)
         self._len_ = len(content)
         self._path_ = path
@@ -122,7 +118,6 @@ class fs(Fuse):
 
         self._cfg_ = lpkconfig(option_config_file, cfg_schema).values()
 
-
     def _ldapConnect_(self):
         """for ssl use, pass a ldaps:// url form"""
         try:
@@ -139,24 +134,26 @@ class fs(Fuse):
 
         except ldap.INVALID_CREDENTIALS:
             # todo : make better and log it correctly
-            print "Manager DN or password is incorrect (INVALID CREDENTIALS)."
+            syslog.syslog(syslog.LOG_ERR, "Manager DN or password is incorrect (INVALID CREDENTIALS).")
             con = None
 
         except ldap.LDAPError, e:
             # todo : make better and log it correctly
+            syslog.syslog(syslog.LOG_ERR, "LDAP exception: " % str(e))
             raise ldap.LDAPError, e
             con = None
         return con
-    
+
 
     def _query_all_users_(self, con):
         """Retrieve all users"""
-        
+
         login_attr = self._cfg_["login_attr"]
         uid_attr = self._cfg_['uid_attr']
         gid_attr = self._cfg_['gid_attr']
         pkey_attr = self._cfg_['pkey_attr']
-        
+        prefix = self._cfg_['prefix']
+
         users = con.search_s( self._cfg_['basedn'],
                               ldap.SCOPE_SUBTREE,
                               self._cfg_['query'],
@@ -164,7 +161,7 @@ class fs(Fuse):
                             )
 
         # Prepare users dict (login is the key, not dn)
-        results = {}        
+        results = {}
         for user in users:
             dn = user[0]
             attrs = user[1]
@@ -174,27 +171,114 @@ class fs(Fuse):
                 continue
 
             login = attrs[login_attr][0]
-            content = pkfile('/%s/authorized_keys' % login,'%s\n' % ('\n'.join(attrs[pkey_attr]))) \
-                if pkey_attr in attrs else File('')
+            if pkey_attr in attrs:
+                key_lines = []
+                for key_line in attrs[pkey_attr]:
+                    key_lines.append("%s %s" % (prefix.replace('%u',login), key_line.strip()))
+                content = pkfile('/%s/authorized_keys' % login, '%s' % ('\n'.join(key_lines)))
+            else:
+                content = File('')
             results[login] = \
-                { 'dn' : dn,                               
+                { 'dn' : dn,
                   'uid' : int(attrs[uid_attr][0]),
                   'gid' : int(attrs[gid_attr][0]),
                   'pkey' : content,
                 } 
         return results
 
+    def _query_all_groups_(self, con):
+        """Retrieve all groups"""
+        
+        group_attr = self._cfg_['group_attr']
+        gid_attr = self._cfg_['gid_attr']
+        member_attr = self._cfg_['group_member_attr']
+        
+        groups = con.search_s( self._cfg_['group_basedn'],
+                              ldap.SCOPE_SUBTREE,
+                              self._cfg_['group_query'],
+                              ( group_attr, gid_attr, member_attr)
+                            )
+
+        # Prepare users dict (login is the key, not dn)
+        results = {}
+        for group in groups:
+            dn = group[0]
+            attrs = group[1]
+
+            if len(attrs) != 3:
+                # incomplete data set
+                continue
+
+            group_name = attrs[group_attr][0]
+
+            key_lines = self._getKeysForUsers_(con, group_name, attrs[member_attr])
+            if len(key_lines) > 0:
+                content = pkfile('/%s/authorized_keys' % group_name, '%s' % key_lines)
+            else:
+                content = File('')
+
+            results[group_name] = \
+                { 'dn' : dn,
+                  'uid' : int(attrs[gid_attr][0]),
+                  'gid' : int(attrs[gid_attr][0]),
+                  'pkey' : content,
+                }
+
+        return results
+
+
+    def _getKeysForUsers_(self, con, group, members):
+        """Returns all keys"""
+
+        login_attr = self._cfg_["login_attr"]
+        uid_attr = self._cfg_['uid_attr']
+        gid_attr = self._cfg_['gid_attr']
+        pkey_attr = self._cfg_['pkey_attr']
+        prefix = self._cfg_['prefix.%s' % group]
+
+        users = con.search_s( self._cfg_['basedn'],
+                              ldap.SCOPE_SUBTREE,
+                              self._cfg_['query'],
+                              ( login_attr, uid_attr, gid_attr, pkey_attr)
+                            )
+
+        # Prepare users dict (login is the key, not dn)
+        content = ''
+        for user in users:
+            dn = user[0]
+            attrs = user[1]
+            key_lines = []
+
+            if len(attrs) != 4:
+                # incomplete data set
+                continue
+
+            login = attrs[login_attr][0]
+            if not login in members:
+                continue
+
+            if pkey_attr in attrs:
+                for key_line in attrs[pkey_attr]:
+                    key_line = "%s %s" % (prefix.replace('%u',login), key_line.strip())
+                    key_lines.append(key_line)
+                content += ('\n'.join(key_lines) + '\n')
+
+        return content
+
 
     def _ldapDisconnect_(self, con):
         """Disconnect ldap"""
         con.unbind()
-        
+
 
     def _reloadKeys_(self):
         """Reload users and keys from ldap"""
         con = self._ldapConnect_()
         if con:
-            self._users_ = self._query_all_users_(con)
+            if self._cfg_['group_mode'] == 0:
+                self._users_ = self._query_all_users_(con)
+            else:
+                self._users_ = self._query_all_groups_(con)
             self._ldapDisconnect_(con)
             self._lastCacheRefresh_ = mktime(gmtime())
         else:
@@ -215,19 +299,19 @@ class fs(Fuse):
             path_len = len(path.split(fssep))
             
             if path_len not in [2,3]:
-                raise NotFound
+                raise RuntimeError('path_len:'+path_len)
 
             # Retrieve user
             login = path.split(fssep)[1]
             if not login in self._users_:
-                raise NotFound
+                raise RuntimeError('login not found in users')
 
             user = self._users_[login]
        
             # User file
             if path_len == 3:
                 if not path.endswith('%sauthorized_keys' % fssep):
-                    raise NotFound
+                    raise RuntimeError('wrong filename')
                 keyfile = True
                 
         return root, user, keyfile
@@ -267,7 +351,8 @@ class fs(Fuse):
 
         try:
             root, user, keyfile = self._parsePath_(path)
-        except NotFound:
+        except Exception, err:
+            syslog.syslog(syslog.LOG_ERR, "Exception: " % str(err))
             return -errno.ENOENT
         
         if root:
@@ -275,6 +360,7 @@ class fs(Fuse):
             st.st_mode = S_IFDIR | 0755
             st.st_uid = 0
             st.st_gid = 0
+            st.st_size = 4096
             st.st_nlink = 3
             return st
         else:
@@ -290,6 +376,7 @@ class fs(Fuse):
             else:
                 # User directory
                 st.st_mode = S_IFDIR | 0700
+                st.st_size = 4096
                 st.st_nlink = 3
             
         return st

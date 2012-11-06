@@ -1,4 +1,4 @@
-Metadata-Version: 1.0
+Metadata-Version: 1.1
 Name: fuselpk
 Version: 0.1
 Summary: LDAP Public Key filesystem for openssh
@@ -6,7 +6,7 @@ Home-page: UNKNOWN
 Author: Frédéric Dupré (Alterway group)
 Author-email: frederic.dupre@gmail.com
 License: GPLv3
-Description: <open file 'README', mode 'r' at 0x1a2a780>
+Description: <open file 'README', mode 'r' at 0x1dcdb70>
 Keywords: ldap ssh authentication fuse
 Platform: UNKNOWN
 Classifier: Operating System :: Unix

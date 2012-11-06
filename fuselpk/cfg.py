@@ -1,6 +1,13 @@
 import os
 from ConfigParser import ConfigParser
 
+import sys
+import re
+
+SECTION = re.compile('^\s*\[\s*([^\]]*)\s*\]\s*$')
+PARAM   = re.compile('^\s*(\w+)\s*=\s*(.*)\s*$')
+COMMENT = re.compile('^\s*;.*$')
+
 default_config_file = '/etc/ssh/fuselpk.cfg'
 
 # This is the "schema" of configuration
@@ -16,17 +23,17 @@ cfg_schema = {
               'rootdn' :
                   {
                       'type' : unicode,
-                      'totype' : unicode,                      
+                      'totype' : unicode,
                       'default' : 'cn=admin,dc=localhost',
                   },
               'rootpw' : 
                   {
-                      'type' : unicode,                      
+                      'type' : unicode,
                       'default' : 'admin',
                   },
               'auth' :
                   {
-                      'type' : unicode,                      
+                      'type' : unicode,
                       'choices' : ['simple'],
                       'default' : 'simple',
                   },
@@ -34,8 +41,8 @@ cfg_schema = {
                   {
                       'type' : unicode,
                       'default' : 'dc=localhost',
-                  },                      
-              'query' : 
+                  },
+              'query' :
                   {
                       'type' : unicode,
                       'default' : 'objectClass=ldapPublicKey',
@@ -70,8 +77,46 @@ cfg_schema = {
                       'type' : int,
                       'default' : 60,
                  },
-             }
-        }
+              'prefix' :
+                  {
+                      'type' : str,
+                      'default' : '',
+                 },
+              'group_mode' :
+                  {
+                      'type' : int,
+                      'default' : 0,
+                 },
+              'group_member_attr' :
+                  {
+                      'type' : str,
+                      'default' : 'memberUid',
+                  },
+              'group_attr' :
+                  {
+                      'type' : str,
+                      'default' : 'cn',
+                  },
+              'group_basedn' :
+                  {
+                      'type' : unicode,
+                      'default' : 'dc=localhost',
+                  },
+              'group_query' : 
+                  {
+                      'type' : unicode,
+                      'default' : 'objectClass=*',
+                  },
+             },
+    'prefix' :
+            {
+              '_any_' :
+                  { 
+                      'type' : unicode,
+                      'default' : '',
+                  },
+            }
+}
 
 
 class ConfigurationFileNotFound(Exception):
@@ -113,7 +158,7 @@ class lpkconfig(ConfigParser):
         # let's parse configuration file
         cp = ConfigParser()
         cp.read(self._configuration_file_)
-        
+
         # Sections verifications
         unused_sections = [section for section in cp.sections() \
                            if section not in schema.keys()]
@@ -132,20 +177,27 @@ class lpkconfig(ConfigParser):
         # Options verifications and merging
         for section in schema:
             not_used_options = [option for option in cp.options(section) \
-                                if option not in schema[section]]
+                                if option not in schema[section] and not '_any_' in schema[section]]
             if not_used_options != []:
                 raise ConfigurationOptionNotUsed, \
                     'Option(s) not used in section \'%s\' : %s' % \
                     (section, ' '.join(not_used_options))
-            
+
             for option in cp.options(section):
-                t = schema[section][option]['type']
+                if option in schema[section]:
+                    t = schema[section][option]['type']
+                elif 'any' in schema[section]:
+                    t = schema[section]['_any_']['type']
+
                 try:
                     v = t( cp.get(section,option) )
                 except ValueError:
                     raise ConfigurationOptionTypeMismatch, \
                           'Option \'%s\' must be \'%s\'' % (option, t.__name__)
-                values[option] = v
+                if section == 'default':
+                    values[option] = v
+                else:
+                    values['%s.%s' % (section, option)] = v
         return values
 
     def _default_values_(self):
@@ -155,4 +207,3 @@ class lpkconfig(ConfigParser):
                 t = self._schema_[section][param]['type']
                 values[param] = t( self._schema_[section][param]['default'] )
         return values
-
